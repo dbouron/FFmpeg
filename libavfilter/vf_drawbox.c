@@ -31,10 +31,11 @@
 #include "libavutil/eval.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/parseutils.h"
-#include "avfilter.h"
 #include "formats.h"
 #include "internal.h"
 #include "video.h"
+
+#include "drawbox.h"
 
 static const char *const var_names[] = {
     "dar",
@@ -67,20 +68,6 @@ enum var_name {
     VAR_MAX,
     VARS_NB
 };
-
-typedef struct DrawBoxContext {
-    const AVClass *class;
-    int x, y, w, h;
-    int thickness;
-    char *color_str;
-    unsigned char yuv_color[4];
-    int invert_color; ///< invert luma color
-    int vsub, hsub;   ///< chroma subsampling
-    char *x_expr, *y_expr; ///< expression for x and y
-    char *w_expr, *h_expr; ///< expression for width and height
-    char *t_expr;          ///< expression for thickness
-    int have_alpha;
-} DrawBoxContext;
 
 static const int NUM_EXPR_EVALS = 5;
 
