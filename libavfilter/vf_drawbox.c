@@ -71,7 +71,70 @@ enum var_name {
 
 static const int NUM_EXPR_EVALS = 5;
 
-static av_cold int init(AVFilterContext *ctx)
+static int apply_drawbox_c(AVFilterContext *ctx, AVFrame *in)
+{
+    DrawBoxContext *s = ctx->priv;
+    int plane, x, y, xb = s->x, yb = s->y;
+    unsigned char *row[4];
+
+    if (s->have_alpha) {
+        for (y = FFMAX(yb, 0); y < in->height && y < (yb + s->h); y++) {
+            row[0] = in->data[0] + y * in->linesize[0];
+            row[3] = in->data[3] + y * in->linesize[3];
+
+            for (plane = 1; plane < 3; plane++)
+                row[plane] = in->data[plane] +
+                     in->linesize[plane] * (y >> s->vsub);
+
+            if (s->invert_color) {
+                for (x = FFMAX(xb, 0); x < xb + s->w && x < in->width; x++)
+                    if ((y - yb < s->thickness) || (yb + s->h - 1 - y < s->thickness) ||
+                        (x - xb < s->thickness) || (xb + s->w - 1 - x < s->thickness))
+                        row[0][x] = 0xff - row[0][x];
+            } else {
+                for (x = FFMAX(xb, 0); x < xb + s->w && x < in->width; x++) {
+                    if ((y - yb < s->thickness) || (yb + s->h - 1 - y < s->thickness) ||
+                        (x - xb < s->thickness) || (xb + s->w - 1 - x < s->thickness)) {
+                        row[0][x           ] = s->yuv_color[Y];
+                        row[1][x >> s->hsub] = s->yuv_color[U];
+                        row[2][x >> s->hsub] = s->yuv_color[V];
+                        row[3][x           ] = s->yuv_color[A];
+                    }
+                }
+            }
+        }
+    } else {
+        for (y = FFMAX(yb, 0); y < in->height && y < (yb + s->h); y++) {
+            row[0] = in->data[0] + y * in->linesize[0];
+
+            for (plane = 1; plane < 3; plane++)
+                row[plane] = in->data[plane] +
+                     in->linesize[plane] * (y >> s->vsub);
+
+            if (s->invert_color) {
+                for (x = FFMAX(xb, 0); x < xb + s->w && x < in->width; x++)
+                    if ((y - yb < s->thickness) || (yb + s->h - 1 - y < s->thickness) ||
+                        (x - xb < s->thickness) || (xb + s->w - 1 - x < s->thickness))
+                        row[0][x] = 0xff - row[0][x];
+            } else {
+                for (x = FFMAX(xb, 0); x < xb + s->w && x < in->width; x++) {
+                    double alpha = (double)s->yuv_color[A] / 255;
+
+                    if ((y - yb < s->thickness) || (yb + s->h - 1 - y < s->thickness) ||
+                        (x - xb < s->thickness) || (xb + s->w - 1 - x < s->thickness)) {
+                        row[0][x                 ] = (1 - alpha) * row[0][x                 ] + alpha * s->yuv_color[Y];
+                        row[1][x >> s->hsub] = (1 - alpha) * row[1][x >> s->hsub] + alpha * s->yuv_color[U];
+                        row[2][x >> s->hsub] = (1 - alpha) * row[2][x >> s->hsub] + alpha * s->yuv_color[V];
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static av_cold int init(AVFilterContext *ctx,
+                        int (* f)(AVFilterContext *ctx, AVFrame *in))
 {
     DrawBoxContext *s = ctx->priv;
     uint8_t rgba_color[4];
@@ -88,7 +151,13 @@ static av_cold int init(AVFilterContext *ctx)
         s->yuv_color[A] = rgba_color[3];
     }
 
+    s->apply_drawbox = f;
     return 0;
+}
+
+static av_cold int init_drawbox(AVFilterContext *ctx)
+{
+    return init(ctx, apply_drawbox_c);
 }
 
 static int query_formats(AVFilterContext *ctx)
@@ -196,65 +265,15 @@ fail:
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
-    DrawBoxContext *s = inlink->dst->priv;
-    int plane, x, y, xb = s->x, yb = s->y;
-    unsigned char *row[4];
+    DrawBoxContext *drawbox = inlink->dst->priv;
+    AVFilterLink *outlink = inlink->dst->outputs[0];
+    int ret = 0;
 
-    if (s->have_alpha) {
-        for (y = FFMAX(yb, 0); y < frame->height && y < (yb + s->h); y++) {
-            row[0] = frame->data[0] + y * frame->linesize[0];
-            row[3] = frame->data[3] + y * frame->linesize[3];
+    ret = drawbox->apply_drawbox(inlink->dst, frame);
 
-            for (plane = 1; plane < 3; plane++)
-                row[plane] = frame->data[plane] +
-                     frame->linesize[plane] * (y >> s->vsub);
-
-            if (s->invert_color) {
-                for (x = FFMAX(xb, 0); x < xb + s->w && x < frame->width; x++)
-                    if ((y - yb < s->thickness) || (yb + s->h - 1 - y < s->thickness) ||
-                        (x - xb < s->thickness) || (xb + s->w - 1 - x < s->thickness))
-                        row[0][x] = 0xff - row[0][x];
-            } else {
-                for (x = FFMAX(xb, 0); x < xb + s->w && x < frame->width; x++) {
-                    if ((y - yb < s->thickness) || (yb + s->h - 1 - y < s->thickness) ||
-                        (x - xb < s->thickness) || (xb + s->w - 1 - x < s->thickness)) {
-                        row[0][x           ] = s->yuv_color[Y];
-                        row[1][x >> s->hsub] = s->yuv_color[U];
-                        row[2][x >> s->hsub] = s->yuv_color[V];
-                        row[3][x           ] = s->yuv_color[A];
-                    }
-                }
-            }
-        }
-    } else {
-        for (y = FFMAX(yb, 0); y < frame->height && y < (yb + s->h); y++) {
-            row[0] = frame->data[0] + y * frame->linesize[0];
-
-            for (plane = 1; plane < 3; plane++)
-                row[plane] = frame->data[plane] +
-                     frame->linesize[plane] * (y >> s->vsub);
-
-            if (s->invert_color) {
-                for (x = FFMAX(xb, 0); x < xb + s->w && x < frame->width; x++)
-                    if ((y - yb < s->thickness) || (yb + s->h - 1 - y < s->thickness) ||
-                        (x - xb < s->thickness) || (xb + s->w - 1 - x < s->thickness))
-                        row[0][x] = 0xff - row[0][x];
-            } else {
-                for (x = FFMAX(xb, 0); x < xb + s->w && x < frame->width; x++) {
-                    double alpha = (double)s->yuv_color[A] / 255;
-
-                    if ((y - yb < s->thickness) || (yb + s->h - 1 - y < s->thickness) ||
-                        (x - xb < s->thickness) || (xb + s->w - 1 - x < s->thickness)) {
-                        row[0][x                 ] = (1 - alpha) * row[0][x                 ] + alpha * s->yuv_color[Y];
-                        row[1][x >> s->hsub] = (1 - alpha) * row[1][x >> s->hsub] + alpha * s->yuv_color[U];
-                        row[2][x >> s->hsub] = (1 - alpha) * row[2][x >> s->hsub] + alpha * s->yuv_color[V];
-                    }
-                }
-            }
-        }
-    }
-
-    return ff_filter_frame(inlink->dst->outputs[0], frame);
+    if (ret < 0)
+        return ret;
+    return ff_filter_frame(outlink, frame);
 }
 
 #define OFFSET(x) offsetof(DrawBoxContext, x)
@@ -302,7 +321,7 @@ AVFilter ff_vf_drawbox = {
     .description   = NULL_IF_CONFIG_SMALL("Draw a colored box on the input video."),
     .priv_size     = sizeof(DrawBoxContext),
     .priv_class    = &drawbox_class,
-    .init          = init,
+    .init          = init_drawbox,
     .query_formats = query_formats,
     .inputs        = drawbox_inputs,
     .outputs       = drawbox_outputs,
@@ -335,27 +354,27 @@ static av_pure av_always_inline int pixel_belongs_to_grid(DrawBoxContext *drawgr
         || y_modulo < drawgrid->thickness;  // Belongs to horizontal line
 }
 
-static int drawgrid_filter_frame(AVFilterLink *inlink, AVFrame *frame)
+static int apply_gridbox_c(AVFilterContext *ctx, AVFrame *in)
 {
-    DrawBoxContext *drawgrid = inlink->dst->priv;
+    DrawBoxContext *drawgrid = ctx->priv;
     int plane, x, y;
     uint8_t *row[4];
 
     if (drawgrid->have_alpha) {
-        for (y = 0; y < frame->height; y++) {
-            row[0] = frame->data[0] + y * frame->linesize[0];
-            row[3] = frame->data[3] + y * frame->linesize[3];
+        for (y = 0; y < in->height; y++) {
+            row[0] = in->data[0] + y * in->linesize[0];
+            row[3] = in->data[3] + y * in->linesize[3];
 
             for (plane = 1; plane < 3; plane++)
-                row[plane] = frame->data[plane] +
-                     frame->linesize[plane] * (y >> drawgrid->vsub);
+                row[plane] = in->data[plane] +
+                     in->linesize[plane] * (y >> drawgrid->vsub);
 
             if (drawgrid->invert_color) {
-                for (x = 0; x < frame->width; x++)
+                for (x = 0; x < in->width; x++)
                     if (pixel_belongs_to_grid(drawgrid, x, y))
                         row[0][x] = 0xff - row[0][x];
             } else {
-                for (x = 0; x < frame->width; x++) {
+                for (x = 0; x < in->width; x++) {
                     if (pixel_belongs_to_grid(drawgrid, x, y)) {
                         row[0][x                  ] = drawgrid->yuv_color[Y];
                         row[1][x >> drawgrid->hsub] = drawgrid->yuv_color[U];
@@ -366,19 +385,19 @@ static int drawgrid_filter_frame(AVFilterLink *inlink, AVFrame *frame)
             }
         }
     } else {
-        for (y = 0; y < frame->height; y++) {
-            row[0] = frame->data[0] + y * frame->linesize[0];
+        for (y = 0; y < in->height; y++) {
+            row[0] = in->data[0] + y * in->linesize[0];
 
             for (plane = 1; plane < 3; plane++)
-                row[plane] = frame->data[plane] +
-                     frame->linesize[plane] * (y >> drawgrid->vsub);
+                row[plane] = in->data[plane] +
+                     in->linesize[plane] * (y >> drawgrid->vsub);
 
             if (drawgrid->invert_color) {
-                for (x = 0; x < frame->width; x++)
+                for (x = 0; x < in->width; x++)
                     if (pixel_belongs_to_grid(drawgrid, x, y))
                         row[0][x] = 0xff - row[0][x];
             } else {
-                for (x = 0; x < frame->width; x++) {
+                for (x = 0; x < in->width; x++) {
                     double alpha = (double)drawgrid->yuv_color[A] / 255;
 
                     if (pixel_belongs_to_grid(drawgrid, x, y)) {
@@ -391,7 +410,12 @@ static int drawgrid_filter_frame(AVFilterLink *inlink, AVFrame *frame)
         }
     }
 
-    return ff_filter_frame(inlink->dst->outputs[0], frame);
+    return 0;
+}
+
+static av_cold int init_gridbox(AVFilterContext *ctx)
+{
+    return init(ctx, apply_gridbox_c);
 }
 
 static const AVOption drawgrid_options[] = {
@@ -415,7 +439,7 @@ static const AVFilterPad drawgrid_inputs[] = {
         .name           = "default",
         .type           = AVMEDIA_TYPE_VIDEO,
         .config_props   = config_input,
-        .filter_frame   = drawgrid_filter_frame,
+        .filter_frame   = filter_frame,
         .needs_writable = 1,
     },
     { NULL }
@@ -434,7 +458,7 @@ AVFilter ff_vf_drawgrid = {
     .description   = NULL_IF_CONFIG_SMALL("Draw a colored grid on the input video."),
     .priv_size     = sizeof(DrawBoxContext),
     .priv_class    = &drawgrid_class,
-    .init          = init,
+    .init          = init_gridbox,
     .query_formats = query_formats,
     .inputs        = drawgrid_inputs,
     .outputs       = drawgrid_outputs,

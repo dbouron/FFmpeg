@@ -22,6 +22,26 @@
 #define AVFILTER_DRAWBOX_H
 
 #include "avfilter.h"
+#if CONFIG_OPENCL
+#include "libavutil/opencl.h"
+#endif
+
+#if CONFIG_OPENCL
+
+typedef struct DrawBoxOpenclContext {
+    cl_command_queue command_queue;
+    cl_program program;
+    cl_kernel kernel_drawbox;
+    int in_plane_size[8];
+    int out_plane_size[8];
+    int plane_num;
+    cl_mem cl_inbuf;
+    size_t cl_inbuf_size;
+    cl_mem cl_outbuf;
+    size_t cl_outbuf_size;
+} DrawBoxOpenclContext;
+
+#endif
 
 typedef struct DrawBoxContext {
     const AVClass *class;
@@ -35,6 +55,10 @@ typedef struct DrawBoxContext {
     char *w_expr, *h_expr; ///< expression for width and height
     char *t_expr;          ///< expression for thickness
     int have_alpha;
+#if CONFIG_OPENCL
+    DrawBoxOpenclContext opencl_ctx;
+#endif
+    int (* apply_drawbox)(AVFilterContext *ctx, AVFrame *in);
 } DrawBoxContext;
 
 #endif /* AVFILTER_DRAWBOX_H */
