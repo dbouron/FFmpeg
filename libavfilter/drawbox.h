@@ -32,13 +32,11 @@ typedef struct DrawBoxOpenclContext {
     cl_command_queue command_queue;
     cl_program program;
     cl_kernel kernel_drawbox;
-    int in_plane_size[8];
-    int out_plane_size[8];
+    cl_kernel kernel_drawgrid;
+    int plane_size[8];
     int plane_num;
-    cl_mem cl_inbuf;
-    size_t cl_inbuf_size;
-    cl_mem cl_outbuf;
-    size_t cl_outbuf_size;
+    cl_mem cl_buf;
+    size_t cl_buf_size;
 } DrawBoxOpenclContext;
 
 #endif
@@ -55,6 +53,7 @@ typedef struct DrawBoxContext {
     char *w_expr, *h_expr; ///< expression for width and height
     char *t_expr;          ///< expression for thickness
     int have_alpha;
+    int opencl;
 #if CONFIG_OPENCL
     DrawBoxOpenclContext opencl_ctx;
 #endif
