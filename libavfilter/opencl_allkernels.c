@@ -23,6 +23,7 @@
 #include "libavutil/opencl.h"
 #include "deshake_opencl_kernel.h"
 #include "unsharp_opencl_kernel.h"
+#include "drawbox_opencl_kernel.h"
 #endif
 
 #define OPENCL_REGISTER_KERNEL_CODE(X, x)                                              \
@@ -37,5 +38,6 @@ void ff_opencl_register_filter_kernel_code_all(void)
  #if CONFIG_OPENCL
    OPENCL_REGISTER_KERNEL_CODE(DESHAKE,     deshake);
    OPENCL_REGISTER_KERNEL_CODE(UNSHARP,     unsharp);
+   OPENCL_REGISTER_KERNEL_CODE(DRAWBOX,     drawbox);
  #endif
 }

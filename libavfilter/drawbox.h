@@ -26,6 +26,8 @@
 #include "libavutil/opencl.h"
 #endif
 
+enum { Y, U, V, A };
+
 #if CONFIG_OPENCL
 
 typedef struct DrawBoxOpenclContext {
@@ -33,10 +35,15 @@ typedef struct DrawBoxOpenclContext {
     cl_program program;
     cl_kernel kernel_drawbox;
     cl_kernel kernel_drawgrid;
-    int plane_size[8];
+    int in_plane_size[8];
+    int out_plane_size[8];
     int plane_num;
-    cl_mem cl_buf;
-    size_t cl_buf_size;
+    cl_mem cl_inbuf;
+    size_t cl_inbuf_size;
+    cl_mem cl_outbuf;
+    size_t cl_outbuf_size;
+    cl_mem cl_yuvbuf;
+    size_t cl_yuvbuf_size;
 } DrawBoxOpenclContext;
 
 #endif
@@ -57,7 +64,7 @@ typedef struct DrawBoxContext {
 #if CONFIG_OPENCL
     DrawBoxOpenclContext opencl_ctx;
 #endif
-    int (* apply_drawbox)(AVFilterContext *ctx, AVFrame *in);
+    int (* apply_drawbox)(AVFilterContext *ctx, AVFrame *in, AVFrame *out);
 } DrawBoxContext;
 
 #endif /* AVFILTER_DRAWBOX_H */

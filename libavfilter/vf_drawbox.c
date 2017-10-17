@@ -36,6 +36,7 @@
 #include "video.h"
 
 #include "drawbox.h"
+#include "drawbox_opencl.h"
 
 static const char *const var_names[] = {
     "dar",
@@ -51,8 +52,6 @@ static const char *const var_names[] = {
     "max",
     NULL
 };
-
-enum { Y, U, V, A };
 
 enum var_name {
     VAR_DAR,
@@ -71,7 +70,7 @@ enum var_name {
 
 static const int NUM_EXPR_EVALS = 5;
 
-static int apply_drawbox_c(AVFilterContext *ctx, AVFrame *in)
+static int apply_drawbox_c(AVFilterContext *ctx, AVFrame *in, AVFrame *out)
 {
     DrawBoxContext *s = ctx->priv;
     int plane, x, y, xb = s->x, yb = s->y;
@@ -130,12 +129,13 @@ static int apply_drawbox_c(AVFilterContext *ctx, AVFrame *in)
             }
         }
     }
+    av_frame_move_ref(out, in);
     return 0;
 }
 
-static av_cold int init(AVFilterContext *ctx,
-                        int (* f)(AVFilterContext *ctx, AVFrame *in))
+static av_cold int init(AVFilterContext *ctx)
 {
+    int ret = 0;
     DrawBoxContext *s = ctx->priv;
     uint8_t rgba_color[4];
 
@@ -150,14 +150,35 @@ static av_cold int init(AVFilterContext *ctx,
         s->yuv_color[V] = RGB_TO_V_CCIR(rgba_color[0], rgba_color[1], rgba_color[2], 0);
         s->yuv_color[A] = rgba_color[3];
     }
-
-    s->apply_drawbox = f;
-    return 0;
+    return ret;
 }
 
 static av_cold int init_drawbox(AVFilterContext *ctx)
 {
-    return init(ctx, apply_drawbox_c);
+    DrawBoxContext *s = ctx->priv;
+    int ret = 0;
+
+    s->apply_drawbox = apply_drawbox_c;
+    if (!CONFIG_OPENCL && s->opencl) {
+        av_log(ctx, AV_LOG_ERROR, "OpenCL support was not enabled in this build, cannot be selected\n");
+        return AVERROR(EINVAL);
+    }
+    if (CONFIG_OPENCL && s->opencl) {
+        s->apply_drawbox = ff_opencl_apply_drawbox;
+        ret = ff_opencl_drawbox_init(ctx);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+    return init(ctx);
+}
+
+static av_cold void uninit(AVFilterContext *ctx)
+{
+    DrawBoxContext *drawbox = ctx->priv;
+
+    if (CONFIG_OPENCL && drawbox->opencl)
+        ff_opencl_drawbox_uninit(ctx);
 }
 
 static int query_formats(AVFilterContext *ctx)
@@ -267,13 +288,30 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
     DrawBoxContext *drawbox = inlink->dst->priv;
     AVFilterLink *outlink = inlink->dst->outputs[0];
+    AVFrame *out;
     int ret = 0;
 
-    ret = drawbox->apply_drawbox(inlink->dst, frame);
+    out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
+    if (!out) {
+        av_frame_free(&frame);
+        return AVERROR(ENOMEM);
+    }
+    av_frame_copy_props(out, frame);
+    if (CONFIG_OPENCL && drawbox->opencl) {
+        ret = ff_opencl_drawbox_process_inout_buf(inlink->dst, frame, out);
+        if (ret < 0)
+            goto end;
+    }
 
-    if (ret < 0)
+    ret = drawbox->apply_drawbox(inlink->dst, frame, out);
+
+end:
+    av_frame_free(&frame);
+    if (ret < 0) {
+        av_frame_free(&out);
         return ret;
-    return ff_filter_frame(outlink, frame);
+    }
+    return ff_filter_frame(outlink, out);
 }
 
 #define OFFSET(x) offsetof(DrawBoxContext, x)
@@ -292,6 +330,7 @@ static const AVOption drawbox_options[] = {
     { "c",         "set color of the box",                         OFFSET(color_str), AV_OPT_TYPE_STRING, { .str = "black" }, CHAR_MIN, CHAR_MAX, FLAGS },
     { "thickness", "set the box thickness",                        OFFSET(t_expr),    AV_OPT_TYPE_STRING, { .str="3" },       CHAR_MIN, CHAR_MAX, FLAGS },
     { "t",         "set the box thickness",                        OFFSET(t_expr),    AV_OPT_TYPE_STRING, { .str="3" },       CHAR_MIN, CHAR_MAX, FLAGS },
+    { "opencl",    "use OpenCL filtering capabilities",            OFFSET(opencl),    AV_OPT_TYPE_BOOL,   { .i64 = 0 },       0,        1,        FLAGS },
     { NULL }
 };
 
@@ -322,6 +361,7 @@ AVFilter ff_vf_drawbox = {
     .priv_size     = sizeof(DrawBoxContext),
     .priv_class    = &drawbox_class,
     .init          = init_drawbox,
+    .uninit        = uninit,
     .query_formats = query_formats,
     .inputs        = drawbox_inputs,
     .outputs       = drawbox_outputs,
@@ -354,7 +394,7 @@ static av_pure av_always_inline int pixel_belongs_to_grid(DrawBoxContext *drawgr
         || y_modulo < drawgrid->thickness;  // Belongs to horizontal line
 }
 
-static int apply_gridbox_c(AVFilterContext *ctx, AVFrame *in)
+static int apply_drawgrid_c(AVFilterContext *ctx, AVFrame *in, AVFrame *out)
 {
     DrawBoxContext *drawgrid = ctx->priv;
     int plane, x, y;
@@ -409,26 +449,42 @@ static int apply_gridbox_c(AVFilterContext *ctx, AVFrame *in)
             }
         }
     }
-
+    av_frame_move_ref(out, in);
     return 0;
 }
 
-static av_cold int init_gridbox(AVFilterContext *ctx)
+static av_cold int init_drawgrid(AVFilterContext *ctx)
 {
-    return init(ctx, apply_gridbox_c);
+    DrawBoxContext *s = ctx->priv;
+    int ret = 0;
+
+    s->apply_drawbox = apply_drawgrid_c;
+    if (!CONFIG_OPENCL && s->opencl) {
+        av_log(ctx, AV_LOG_ERROR, "OpenCL support was not enabled in this build, cannot be selected\n");
+        return AVERROR(EINVAL);
+    }
+    if (CONFIG_OPENCL && s->opencl) {
+        s->apply_drawbox = ff_opencl_apply_drawgrid;
+        ret = ff_opencl_drawbox_init(ctx);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+    return init(ctx);
 }
 
 static const AVOption drawgrid_options[] = {
-    { "x",         "set horizontal offset",   OFFSET(x_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
-    { "y",         "set vertical offset",     OFFSET(y_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
-    { "width",     "set width of grid cell",  OFFSET(w_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
-    { "w",         "set width of grid cell",  OFFSET(w_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
-    { "height",    "set height of grid cell", OFFSET(h_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
-    { "h",         "set height of grid cell", OFFSET(h_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
-    { "color",     "set color of the grid",   OFFSET(color_str), AV_OPT_TYPE_STRING, { .str = "black" }, CHAR_MIN, CHAR_MAX, FLAGS },
-    { "c",         "set color of the grid",   OFFSET(color_str), AV_OPT_TYPE_STRING, { .str = "black" }, CHAR_MIN, CHAR_MAX, FLAGS },
-    { "thickness", "set grid line thickness", OFFSET(t_expr),    AV_OPT_TYPE_STRING, {.str="1"},         CHAR_MIN, CHAR_MAX, FLAGS },
-    { "t",         "set grid line thickness", OFFSET(t_expr),    AV_OPT_TYPE_STRING, {.str="1"},         CHAR_MIN, CHAR_MAX, FLAGS },
+    { "x",         "set horizontal offset",                        OFFSET(x_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
+    { "y",         "set vertical offset",                          OFFSET(y_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
+    { "width",     "set width of grid cell",                       OFFSET(w_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
+    { "w",         "set width of grid cell",                       OFFSET(w_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
+    { "height",    "set height of grid cell",                      OFFSET(h_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
+    { "h",         "set height of grid cell",                      OFFSET(h_expr),    AV_OPT_TYPE_STRING, { .str="0" },       CHAR_MIN, CHAR_MAX, FLAGS },
+    { "color",     "set color of the grid",                        OFFSET(color_str), AV_OPT_TYPE_STRING, { .str = "black" }, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "c",         "set color of the grid",                        OFFSET(color_str), AV_OPT_TYPE_STRING, { .str = "black" }, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "thickness", "set grid line thickness",                      OFFSET(t_expr),    AV_OPT_TYPE_STRING, {.str="1"},         CHAR_MIN, CHAR_MAX, FLAGS },
+    { "t",         "set grid line thickness",                      OFFSET(t_expr),    AV_OPT_TYPE_STRING, {.str="1"},         CHAR_MIN, CHAR_MAX, FLAGS },
+    { "opencl",    "use OpenCL filtering capabilities",            OFFSET(opencl),    AV_OPT_TYPE_BOOL,   { .i64 = 0 },       0,        1,        FLAGS },
     { NULL }
 };
 
@@ -458,7 +514,8 @@ AVFilter ff_vf_drawgrid = {
     .description   = NULL_IF_CONFIG_SMALL("Draw a colored grid on the input video."),
     .priv_size     = sizeof(DrawBoxContext),
     .priv_class    = &drawgrid_class,
-    .init          = init_gridbox,
+    .init          = init_drawgrid,
+    .uninit        = uninit,
     .query_formats = query_formats,
     .inputs        = drawgrid_inputs,
     .outputs       = drawgrid_outputs,
