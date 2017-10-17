@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2013 Wei Gao <weigao@multicorewareinc.com>
+ * Copyright (C) 2017 Dimitri Bouron <bouron.d@gmail.com>
  *
  * This file is part of FFmpeg.
  *

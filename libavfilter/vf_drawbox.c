@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2008 Affine Systems, Inc (Michael Sullivan, Bobby Impollonia)
  * Copyright (c) 2013 Andrey Utkin <andrey.krieger.utkin gmail com>
+ * Copyright (C) 2017 Dimitri Bouron <bouron.d@gmail.com>
  *
  * This file is part of FFmpeg.
  *
