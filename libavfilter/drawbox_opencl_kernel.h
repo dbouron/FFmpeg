@@ -18,8 +18,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef AV_FILTER_DRAWBOX_OPENCL_KERNEL_H
-#define AV_FILTER_DRAWBOX_OPENCL_KERNEL_H
+#ifndef AVFILTER_DRAWBOX_OPENCL_KERNEL_H
+#define AVFILTER_DRAWBOX_OPENCL_KERNEL_H
 
 #include "libavutil/opencl.h"
 
@@ -213,4 +213,4 @@ kernel void drawgrid(global unsigned char *src,
 }
 );
 
-#endif /* AV_FILTER_DRAWBOX_OPENCL_KERNEL_H */
+#endif /* AVFILTER_DRAWBOX_OPENCL_KERNEL_H */
